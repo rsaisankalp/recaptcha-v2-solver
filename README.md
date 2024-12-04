@@ -2,26 +2,30 @@
 
 A collection of methods to solve Google ReCaptcha v2 challenges using different approaches. This project provides three different methods to bypass ReCaptcha:
 
+
 ## Available Methods
 
-### 1. Audio Challenge Method 
+### 1. 🎧 Audio Challenge Method 
 - Uses wit.ai to transcribe ReCaptcha audio challenges
-- Most reliable free method
 - Requires FREE wit.ai API keys
 - Average success rate: 70-80%
 
-### 2. 2Captcha Service
+### 2. 👥 2Captcha Service
 - Uses paid human captcha solving service
 - Most reliable but costs money ($2.99 per 1000 solves)
-- Simple implementation
 - Requires 2captcha API key
 - Success rate: 95%+
 
-### 3. Visual Challenge Method (Experimental)
+### 3. 🤖 Visual Challenge Method (Experimental)
 - Uses AI (Gemini) to solve visual challenges
 - Experimental and less reliable
-- Free but requires Gemini API keys
+- requires Free Gemini API keys
 - Success rate: varies
+
+## Visual Challenge bypass demo: See Google Gemini solving Google ReCaptcha in action
+
+<video src="media/visual_challenge_demo.mp4" controls></video>
+
 
 ## Features
 
