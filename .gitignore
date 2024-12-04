@@ -2,6 +2,7 @@
 chrome-data/
 chrome-user-data/
 captcha_screenshots/
+recordings/
 
 # Dependencies
 node_modules/

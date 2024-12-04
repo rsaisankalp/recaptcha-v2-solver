@@ -12,8 +12,8 @@ const EventEmitter = require('events');
 
 dotenv.config();
 // Configuration
-const CONCURRENT_BROWSERS = 4;
-const BATCH_SIZE = 4;
+const CONCURRENT_BROWSERS = 1;
+const BATCH_SIZE = 1;
 const GEMINI_MODEL = 'gemini-1.5-flash';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const ALLOW_PROXY = false;
