@@ -24,7 +24,7 @@ A collection of methods to solve Google ReCaptcha v2 challenges using different 
 
 ## Visual Challenge bypass demo: See Google Gemini solving Google ReCaptcha in action
 
-<video src="media/visual_challenge_demo.mp4" controls></video>
+![Visual Challenge Demo](./media/visual_challenge_demo.gif)
 
 
 ## Features
