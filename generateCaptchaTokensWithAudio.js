@@ -12,7 +12,7 @@ const EventEmitter = require('events');
 dotenv.config();
 
 // Configuration
-const CONCURRENT_BROWSERS = 2;
+const CONCURRENT_BROWSERS = 6;
 const TABS_PER_BROWSER = 1;
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -22,9 +22,10 @@ const executablePath = osPlatform.startsWith('win')
     ? "C://Program Files//Google//Chrome//Application//chrome.exe" 
     : "/usr/bin/google-chrome";
 
-const BROWSER_CLEANUP_DELAY = 2000; // ms to wait after browser closes
+const BROWSER_CLEANUP_DELAY = 400; // ms to wait after browser closes
 const userDataDirs = new Set(); // Track which user data dirs are in use
-const MAX_USER_DATA_DIRS = 10;  // Pool of 10 possible directories
+const MAX_USER_DATA_DIRS = 15;  // Pool of 10 possible directories
+const MAX_ATTEMPTS_BEFORE_RESTART = 200; // After this many attempts, do a full restart
 
 // Setup puppeteer with stealth plugin
 puppeteerExtra.use(StealthPlugin());
@@ -77,12 +78,11 @@ class ResultTracker {
     printStats() {
         const stats = this.getStats();
         if (stats) {
-            console.log('\n=== Current Stats ===');
-            console.log(`Success Rate: ${clc.green(stats.successRate)}%`);
-            console.log(`Average Time per Token: ${clc.cyan(stats.avgTimePerToken)} seconds`);
-            console.log(`Total Attempts: ${clc.yellow(stats.totalAttempts)}`);
-            console.log(`Successful Tokens: ${clc.green(stats.successfulTokens)}`);
-            console.log('===================\n');
+            console.log(clc.cyan(`CAPTCHA Stats: `) + 
+                       clc.green(`${stats.successRate}% Success`) + ` | ` + 
+                       clc.cyan(`${stats.avgTimePerToken}s/token`) + ` | ` + 
+                       clc.yellow(`${stats.totalAttempts} Attempts`) + ` | ` + 
+                       clc.green(`${stats.successfulTokens} Tokens`));
         }
     }
 }
@@ -95,8 +95,8 @@ async function launchBrowser(userDataDir) {
 
     try {
         const browser = await puppeteerExtra.launch({
-            headless: false,
-            executablePath: executablePath,
+            headless: true,
+           // executablePath: executablePath,
             userDataDir: userDataDir,
             protocolTimeout: 30000,
             args: [
@@ -121,7 +121,7 @@ async function launchBrowser(userDataDir) {
             defaultViewport: null,
         });
 
-        // Update page configuration without request interception
+        // Update page configuration with request interception
         browser.on('targetcreated', async (target) => {
             const page = await target.page();
             if (page) {
@@ -137,10 +137,14 @@ async function launchBrowser(userDataDir) {
                     'Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
                 ];
                 const randomUserAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
-                await page.setUserAgent(randomUserAgent);
+                await page.setUserAgent(USER_AGENT);
                 
                 await page.setDefaultTimeout(30000);
                 await page.setDefaultNavigationTimeout(30000);
+
+      
+
+             
             }
         });
 
@@ -274,6 +278,14 @@ async function findCaptchaFrame(page, timeout = 10000) {
             return null;
         }
 
+        // Ensure checkbox is in viewport
+        await frame.evaluate(() => {
+            const checkbox = document.querySelector('.recaptcha-checkbox-border');
+            if (checkbox) {
+                checkbox.scrollIntoView({ block: 'center', inline: 'center' });
+            }
+        });
+
         console.log(clc.green('[Captcha] Checkbox is ready'));
         return { frame, checkbox };
 
@@ -300,7 +312,7 @@ async function waitForToken(page, maxAttempts = 50) {
                 }
 
             } catch (evalError) {
-                if (!evalError.message.includes('Execution context was destroyed') && !evalError.message.includes('Attempted to use detached Frame')) {
+                if (!evalError.message.includes('Execution context was destroyed') && !evalError.message.includes('Attempted to use detached Frame')  && !evalError.message.includes('Target closed')) {
                     console.error(clc.red('[Token] Evaluation error:'), evalError.message);
                 }
                 return null;
@@ -336,6 +348,16 @@ async function waitForChallengeFrame(page, timeout = 10000) {
         return frame;
 
     } catch (error) {
+        // Ignore browser/target closed errors
+        if (error.message.includes('Target closed') || 
+            error.message.includes('Protocol error') ||
+            error.message.includes('Execution context was destroyed') ||
+            error.message.includes('frame got detached') ||
+            error.message.includes('Frame was detached')) {
+            return null;
+        }
+        
+        // Log other types of errors
         if (error.name === 'TimeoutError') {
             console.log(clc.yellow('[Challenge] Challenge frame did not appear within timeout'));
         } else {
@@ -513,6 +535,12 @@ async function solveCaptchaChallenge(page) {
         ]);
 
         if (!checkboxResult) {
+            // Take screenshot with timestamp
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            await page.screenshot({ 
+                path: `test_screenshots/captcha_error_${timestamp}.png`,
+                fullPage: true 
+            });
             console.log(clc.red('[Captcha] Neither token nor challenge appeared'));
             return null;
         }
@@ -538,13 +566,12 @@ async function solveCaptchaChallenge(page) {
         // Audio challenge loop - try up to 3 times
         let audioAttempts = 0;
         const maxAudioAttempts = 3;
+        let isBlocked = false;
 
-        while (audioAttempts < maxAudioAttempts) {
+        while (audioAttempts < maxAudioAttempts && !isBlocked) {
             audioAttempts++;
             if (audioAttempts > 1) {
                 console.log(clc.yellow(`[Audio] Attempt ${audioAttempts}/${maxAudioAttempts}`));
-                // Just wait a moment for the UI to stabilize
-              //  await new Promise(resolve => setTimeout(resolve, 1000));
             }
 
             try {
@@ -612,10 +639,11 @@ async function solveCaptchaChallenge(page) {
 
                 if (audioResult.type === 'blocked') {
                     console.log(clc.yellow('[Captcha] Got blocked after clicking audio button'));
-                    return null; // Don't retry if blocked
+                    isBlocked = true;
+                    return null;
                 }
 
-                console.log(clc.green('[Captcha] Got audio URL:'), clc.yellow(audioResult.url));
+                console.log(clc.green('[Captcha] Got audio URL:'), clc.yellow(audioResult.url.slice(0, 50) + '...'));
 
                 const transcription = await downloadAndTranscribeAudio(audioResult.url);
                 if (!transcription) {
@@ -645,15 +673,14 @@ async function solveCaptchaChallenge(page) {
                     continue;
                 }
 
-                // If we got a token, return immediately without further checks
                 if (verifyResult.type === 'token') {
                     console.log(clc.green('[Captcha] Solution found!'));
                     return verifyResult.token;
                 }
 
-                // Only check these if we didn't get a token
                 if (verifyResult.type === 'blocked') {
                     console.log(clc.yellow('[Captcha] Got blocked after verification'));
+                    isBlocked = true;
                     return null;
                 }
 
@@ -676,20 +703,120 @@ async function solveCaptchaChallenge(page) {
         return null;
     }
 }
-
-async function generateCaptchaTokens(eventEmitter, concurrentBrowsers = CONCURRENT_BROWSERS, tabsPerBrowser = TABS_PER_BROWSER) {
+//TODO :don't make this run forever, isntead run in batche,s after that close all browsers, close puppeteer fully,  clear any user data folder
+ async function generateCaptchaTokens({
+    eventEmitter,
+    concurrentBrowsers = CONCURRENT_BROWSERS,
+    tabsPerBrowser = TABS_PER_BROWSER,
+    captchaUrl = 'https://www.google.com/recaptcha/api2/demo'
+} = {}) {
+    if (!eventEmitter) {
+        throw new Error('eventEmitter is required');
+    }
     console.log(clc.cyan('\n=== Starting Token Generation ==='));
     console.log(clc.white('Concurrent Browsers:'), clc.yellow(concurrentBrowsers));
     console.log(clc.white('Tabs per Browser:'), clc.yellow(tabsPerBrowser));
+    console.log(clc.white('Captcha URL:'), clc.yellow(captchaUrl));
     console.log('=========================================\n');
 
     const resultTracker = new ResultTracker();
     const activeBrowsers = new Set();
+    let totalAttempts = 0;  // Changed from totalTokensGenerated
+
+    // Add a flag to track if restart is in progress
+    let isRestartInProgress = false;
+
+    const performFullRestart = async () => {
+        if (isRestartInProgress) {
+            console.log(clc.yellow('[Debug] Restart already in progress, skipping...'));
+            return;
+        }
+        
+        isRestartInProgress = true;
+        console.log(clc.yellow(`\n[System] Made ${totalAttempts} attempts, initiating graceful shutdown...`));
+        
+        // Stop launching new browsers/operations
+        console.log(clc.cyan('[System] Waiting for current operations to complete...'));
+        
+        // Force cleanup any stuck browsers after timeout
+        const maxWaitTime = 30000; // 30 seconds
+        const startWait = Date.now();
+        
+        // Wait for active browsers to finish their current tasks
+        while (activeBrowsers.size > 0) {
+            console.log(clc.cyan(`[System] Waiting for ${activeBrowsers.size} browsers to finish...`));
+            
+            // Add timeout to prevent infinite waiting
+            if (Date.now() - startWait > maxWaitTime) {
+                console.log(clc.red('[System] Timeout waiting for browsers, forcing cleanup...'));
+                // Force close all remaining browsers
+                const closePromises = Array.from(activeBrowsers).map(browser => browser.cleanup());
+                await Promise.all(closePromises);
+                activeBrowsers.clear();
+                break;
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        // Now perform the actual restart
+        console.log(clc.yellow('[System] All browsers finished, performing cleanup...'));
+        
+        // Clear user data directories
+        userDataDirs.clear();
+        
+        // Delete chrome user data folders
+        const userDataBasePath = './chrome-user-data';
+        try {
+            if (fs.existsSync(userDataBasePath)) {
+                console.log(clc.cyan('[System] Cleaning up Chrome user data...'));
+                fs.rmSync(userDataBasePath, { recursive: true, force: true });
+            }
+        } catch (error) {
+            console.error(clc.red('[System] Error cleaning up Chrome user data:', error.message));
+        }
+        
+        totalAttempts = 0;  // Reset attempts counter instead of tokens
+        console.log(clc.green('[System] Restart complete, continuing token generation'));
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        isRestartInProgress = false;
+    };
+
+    // Modify the shouldRestart function
+    const shouldRestart = async () => {
+        if (isRestartInProgress) return true;
+        if (totalAttempts >= MAX_ATTEMPTS_BEFORE_RESTART) {
+            console.log(clc.yellow(`[Debug] Restart needed at ${totalAttempts} attempts`));
+            performFullRestart().catch(error => {
+                console.error(clc.red('[System] Error during restart:', error));
+                isRestartInProgress = false;
+            });
+            return true;
+        }
+        return false;
+    };
 
     while (true) {
         try {
-            while (activeBrowsers.size < concurrentBrowsers) {
+            // Skip the browser spawning loop entirely if restart is in progress
+            if (isRestartInProgress) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                continue;
+            }
+
+            // Check if we need to restart
+            if (totalAttempts >= MAX_ATTEMPTS_BEFORE_RESTART) {
+                await performFullRestart();
+                continue;
+            }
+
+            while (activeBrowsers.size < concurrentBrowsers && !isRestartInProgress) {
                 try {
+                    console.log(clc.cyan(`[Debug] Active browsers: ${activeBrowsers.size}/${concurrentBrowsers}`));
+                    
+                    // Check again before launching a new browser
+                    if (await shouldRestart()) continue;
+
                     // Get a random available user data directory
                     let userDataDir;
                     let attempts = 0;
@@ -717,50 +844,56 @@ async function generateCaptchaTokens(eventEmitter, concurrentBrowsers = CONCURRE
 
                     const browserPromise = (async () => {
                         try {
-                            // Get all pages, the first one is created automatically
                             const pages = await browser.pages();
-                            const page = pages[0];  // Use the first tab that's created with the browser
+                            const page = pages[0];
                             
                             try {
-                                let attempts = 0;
-                                const maxAttempts = 3;
+                                // Check before starting a new token generation
+                                if (await shouldRestart()) return;
 
-                                while (attempts < maxAttempts) {
-                                    attempts++;
-                                    if (attempts > 1) {
-                                        console.log(clc.yellow(`[Captcha] Attempt ${attempts}/${maxAttempts}`));
-                                    }
+                                await page.goto(captchaUrl, {
+                                    waitUntil: 'networkidle2',
+                                    timeout: 120000
+                                });
 
-                                    await page.goto('https://www.google.com/recaptcha/api2/demo', {
-                                        waitUntil: 'domcontentloaded',
-                                        timeout: 120000
-                                    });
-
-                                    const token = await solveCaptchaChallenge(page);
+                                const token = await solveCaptchaChallenge(page);
+                                
+                                if (token) {
+                                    eventEmitter.emit('tokenGenerated', { token });
                                     
-                                    if (token) {
-                                        eventEmitter.emit('tokenGenerated', { token });
+                                    if (!isRestartInProgress) {
                                         resultTracker.addResult({ success: true });
                                         resultTracker.printStats();
-                                        break;
+                                        totalAttempts++;  // Increment attempts regardless of success
+                                        console.log(clc.cyan(`[System] Total attempts: ${totalAttempts}/${MAX_ATTEMPTS_BEFORE_RESTART}`));
+                                        
+                                        // Trigger restart if needed
+                                        if (totalAttempts >= MAX_ATTEMPTS_BEFORE_RESTART && !isRestartInProgress) {
+                                            console.log(clc.red(`[Debug] Attempt threshold reached, triggering restart`));
+                                            performFullRestart().catch(error => {
+                                                console.error(clc.red('[System] Error during restart:', error));
+                                                isRestartInProgress = false;
+                                            });
+                                        }
                                     } else {
-                                        resultTracker.addResult({ success: false });
+                                        console.log(clc.yellow('[Debug] Token emitted but stats skipped due to restart in progress'));
+                                        await new Promise(resolve => setTimeout(resolve, 2000));
                                     }
-
-                                    if (attempts < maxAttempts) {
-                                        await new Promise(resolve => setTimeout(resolve, 1000));
-                                    }
+                                } else {
+                                    resultTracker.addResult({ success: false });
+                                    totalAttempts++;  // Increment attempts on failure too
                                 }
 
                             } catch (error) {
                                 console.error(clc.red('\nError generating token:', error.message, '\n'));
                                 eventEmitter.emit('tokenError', { error: error.message });
                                 resultTracker.addResult({ success: false });
+                                totalAttempts++;  // Increment attempts on error too
                             }
 
                         } finally {
                             console.log(clc.yellow(`\n[Browser] Closing browser...`));
-                            await browser.cleanup(); // Use cleanup instead of just close
+                            await browser.cleanup();
                             activeBrowsers.delete(browser);
                         }
                     })();
@@ -768,11 +901,10 @@ async function generateCaptchaTokens(eventEmitter, concurrentBrowsers = CONCURRE
                     activeBrowsers.add(browser);
                     browserPromise.catch(error => {
                         console.error(clc.red('Error in browser:', error));
-                        browser.cleanup().catch(console.error); // Ensure cleanup happens on error
+                        browser.cleanup().catch(console.error);
                         activeBrowsers.delete(browser);
                     });
 
-                    // Increased delay between launching browsers
                     await new Promise(resolve => setTimeout(resolve, 2000));
                 } catch (error) {
                     console.error(clc.red('Error launching browser:', error.message));
@@ -807,7 +939,8 @@ if (require.main === module) {
         resultTracker.addResult({ success: false });
     });
     
-    generateCaptchaTokens(eventEmitter, CONCURRENT_BROWSERS, TABS_PER_BROWSER).catch(error => {
+    // Use default values by passing just the required eventEmitter
+    generateCaptchaTokens({ eventEmitter }).catch(error => {
         console.error('Fatal error in token generation:', error);
     });
 } else {
