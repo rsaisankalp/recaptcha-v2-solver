@@ -43,3 +43,6 @@ temp/
 
 videos/
 custom-chrome-data/
+
+# npm package files
+*.tgz
