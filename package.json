@@ -1,6 +1,6 @@
 {
   "name": "recaptcha-v2-solver",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "ReCaptcha v2 bypass solution using three methods: Audio transcription, Visual (Gemini), and 2Captcha",
   "main": "index.js",
   "scripts": {
