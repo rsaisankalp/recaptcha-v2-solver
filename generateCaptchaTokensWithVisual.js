@@ -1,24 +1,14 @@
 const puppeteerExtra = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const axios = require('axios');
 const os = require('os');
-const path = require('path');
-const dotenv = require('dotenv');
 const fs = require('fs').promises;
-const clc = require('cli-color');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const EventEmitter = require('events');
+const createLogger = require('./utils/logger');
+
+// Initialize with default level, will be updated when the main function is called
+let logger = createLogger({ level: 'info' });
 
 
-dotenv.config();
-// Configuration
-const CONCURRENT_BROWSERS = 1;
-const BATCH_SIZE = 1;
-const GEMINI_MODEL = 'gemini-1.5-flash';
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-const ALLOW_PROXY = false;
-const osPlatform = os.platform();
-const executablePath = osPlatform.startsWith('win') ? "C://Program Files//Google//Chrome//Application//chrome.exe" : "/usr/bin/google-chrome";
 
 // Setup puppeteer with stealth plugin
 puppeteerExtra.use(StealthPlugin());
@@ -46,6 +36,9 @@ class ResultTracker {
         if (this.results.length > this.maxResults) {
             this.results.shift();
         }
+
+        // Automatically print stats after adding a result
+        this.printStats();
     }
 
     getStats() {
@@ -71,8 +64,7 @@ class ResultTracker {
     printStats() {
         const stats = this.getStats();
         if (!stats) return;
-
-        console.log(`[Stats] Success Rate: ${clc.green(stats.successRate)}% | Avg Time/Token: ${clc.cyan(stats.avgTimePerToken)}s | Total Attempts: ${clc.yellow(stats.totalAttempts)} | Successful Tokens: ${clc.green(stats.successfulTokens)}`);
+        logger.info(`Stats: Success Rate: ${stats.successRate}% | Avg Time/Token: ${stats.avgTimePerToken}s | Total Attempts: ${stats.totalAttempts} | Successful Tokens: ${stats.successfulTokens}`);
     }
 }
 
@@ -104,12 +96,12 @@ class CaptchaWatcher {
 
     async startWatching() {
         if (!this.page) {
-            console.error('No page set. Call setPage(page) first');
+            logger.error('No page set. Call setPage(page) first');
             return;
         }
 
         if (this.isWatching) {
-            console.log('Watcher is already running');
+            logger.info('Watcher is already running');
             return;
         }
 
@@ -398,13 +390,12 @@ class CaptchaWatcher {
 
 
 // Browser management functions
-async function launchBrowser(userDataDir) {
-    const proxyUrl = `${process.env.PROXY_HOST}:${process.env.PROXY_PORT}`;
+async function launchBrowser(userDataDir, proxyConfig = null, browserConfig) {
     const randomProfile = Math.floor(Math.random() * 4) + 1;
 
     const browser = await puppeteerExtra.launch({
-        headless: false,
-        executablePath: executablePath,
+        headless: browserConfig.headless,
+        executablePath: browserConfig.executablePath,
         userDataDir: userDataDir,
         protocolTimeout: 30000,
         args: [
@@ -423,13 +414,13 @@ async function launchBrowser(userDataDir) {
             '--disable-web-security',
             '--flag-switches-begin --disable-site-isolation-trials --flag-switches-end',
             `--profile-directory=Profile ${randomProfile}`,
-            ALLOW_PROXY ? `--proxy-server=${proxyUrl}` : ''
+            proxyConfig ? `--proxy-server=${proxyConfig.host}:${proxyConfig.port}` : ''
         ].filter(Boolean),
         ignoreDefaultArgs: ['--enable-automation', '--enable-blink-features=AutomationControlled'],
         defaultViewport: null,
     });
 
-    // Update page configuration without request interception
+    // Update page configuration
     browser.on('targetcreated', async (target) => {
         const page = await target.page();
         if (page) {
@@ -438,45 +429,55 @@ async function launchBrowser(userDataDir) {
                 delete navigator.__proto__.webdriver;
             });
 
-            await page.setUserAgent(USER_AGENT);
-
+            const randomUserAgent = browserConfig.userAgents[Math.floor(Math.random() * browserConfig.userAgents.length)];
+            await page.setUserAgent(randomUserAgent);
             await page.setDefaultTimeout(30000);
             await page.setDefaultNavigationTimeout(30000);
+
+            // Set proxy authentication if provided
+            if (proxyConfig?.username && proxyConfig?.password) {
+                await page.authenticate({
+                    username: proxyConfig.username,
+                    password: proxyConfig.password
+                });
+            }
         }
     });
 
     return browser;
 }
 
-async function launchBrowsers() {
-    return Promise.all(
-        Array.from({ length: CONCURRENT_BROWSERS }, async (_, index) => {
-            await new Promise(resolve => setTimeout(resolve, index * 1000));
-            return launchBrowser(`./chrome-user-data/chrome-user-data-${index + 1}`);
-        })
-    );
-}
+
 
 async function closeBrowser(browser) {
     try {
         await browser.close();
     } catch (error) {
-        console.error('Error closing browser:', error);
+        logger.error('Error closing browser:', error);
     }
 }
 
 // Add function to analyze image with Gemini
-async function analyzeWithGemini(screenshotPath, prompt, gridType) {
+async function analyzeWithGemini(screenshotPath, prompt, gridType, geminiConfig) {
     try {
-        console.log(`Original prompt: ${prompt}`);
+        logger.info(`Original prompt: ${prompt}`);
 
-        // Extract main challenge text
         const mainPrompt = prompt.split('Click verify once there are none left')[0].trim()
             .replace(/\.$/, '');
 
-        console.log(`Processed prompt: ${mainPrompt}`);
+        logger.info(`Processed prompt: ${mainPrompt}`);
 
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const genAI = new GoogleGenerativeAI(geminiConfig.apiKey);
+
+        // Use the model from config or fall back to default
+        const model = genAI.getGenerativeModel({
+            model: geminiConfig.model || 'gemini-1.5-flash',
+            generationConfig: {
+                temperature: 0.1,
+                topP: 0.95,
+                topK: 40,
+            }
+        });
 
         // Read screenshot file
         const imageData = await fs.readFile(screenshotPath);
@@ -513,16 +514,6 @@ ${gridDesc}
 Important: If ${mainPrompt} does not appear in ANY tile, ALL tiles should have "has_match": false.
 Respond ONLY with the JSON object.`;
 
-        const model = genAI.getGenerativeModel({
-            model: GEMINI_MODEL,
-            generationConfig: {
-                temperature: 0.1,
-                topP: 0.95,
-                topK: 40,
-
-            }
-        });
-
         const result = await model.generateContent([
             {
                 inlineData: {
@@ -534,9 +525,8 @@ Respond ONLY with the JSON object.`;
         ]);
 
         const response = result.response.text();
-        console.log("\n=== Gemini Response ===");
-        console.log(response);
-        console.log("=" * 30);
+        logger.debug("=== Gemini Response ===");
+        logger.debug(response);
 
         // Clean up response to extract just the JSON part
         let jsonStr = response;
@@ -552,31 +542,29 @@ Respond ONLY with the JSON object.`;
             .filter(([_, data]) => data.has_match)
             .map(([coord]) => coord);
 
-        console.log("\n=== Tiles to Click ===");
-        console.log(`Found ${tilesToClick.length} tiles to click: ${tilesToClick}`);
-        console.log("=" * 30);
+        logger.info("\n=== Tiles to Click ===");
+        logger.info(`Found ${tilesToClick.length} tiles to click: ${tilesToClick}`);
 
         return tilesToClick;
 
     } catch (error) {
-        console.error("\n=== Gemini Analysis Error ===");
-        console.error(`Error: ${error.message}`);
-        console.error(`Type: ${error.constructor.name}`);
-        console.error(`Stack: ${error.stack}`);
-        console.error("=" * 30);
+        logger.error("=== Gemini Analysis Error ===");
+        logger.error(`Error: ${error.message}`);
+        logger.error(`Type: ${error.constructor.name}`);
+        logger.error(`Stack: ${error.stack}`);
         return null;
     }
 }
 
 // Add helper function for screenshot and analysis
-async function takeScreenshotAndAnalyze(frame, challengeInfo, watcher, iterationInfo = '') {
+async function takeScreenshotAndAnalyze(frame, challengeInfo, watcher, iterationInfo = '', geminiConfig) {
     const timestamp = Date.now();
     const screenshotPath = `captcha_screenshots/challenge_${timestamp}.png`;
     await fs.mkdir('captcha_screenshots', { recursive: true });
 
     const challengeArea = await frame.$('.rc-imageselect-challenge');
     if (!challengeArea) {
-        console.log('Could not find challenge area element');
+        logger.error('Could not find challenge area element');
         return null;
     }
 
@@ -591,14 +579,14 @@ async function takeScreenshotAndAnalyze(frame, challengeInfo, watcher, iteration
 
         watcher.onTilesReady(() => {
             if (!hasResolved) {
-                console.log('WATCHER: tiles ready - taking screenshot');
+                logger.debug('WATCHER: tiles ready - taking screenshot');
                 hasResolved = true;
                 clearTimeout(timeout);
                 resolve();
             }
         });
     }).catch(error => {
-        console.log('Error waiting for tiles:', error.message);
+        logger.error('Error waiting for tiles:', error.message);
         return null;
     });
 
@@ -612,29 +600,30 @@ async function takeScreenshotAndAnalyze(frame, challengeInfo, watcher, iteration
         omitBackground: false
     });
 
-    console.log(`\nTaking screenshot: ${screenshotPath}`);
+    logger.info(`Taking screenshot: ${screenshotPath}`);
 
     if (iterationInfo) {
-        console.log(`\n=== Processing Screenshot ${iterationInfo} ===`);
+        logger.info(`=== Processing Screenshot ${iterationInfo} ===`);
     }
 
     // Analyze with Gemini
     return await analyzeWithGemini(
         screenshotPath,
         challengeInfo.promptText || challengeInfo.text,
-        challengeInfo.gridType
+        challengeInfo.gridType,
+        geminiConfig
     );
 }
 
 // Update the main challenge solving function
-async function solveCaptchaChallenge(page) {
+async function solveCaptchaChallenge(page, geminiConfig) {
     const watcher = new CaptchaWatcher();
     watcher.setPage(page);
 
     try {
         // Handle alerts
         page.on('dialog', async dialog => {
-            console.log('Alert detected:', dialog.message());
+            logger.warn('Alert detected:', dialog.message());
             await dialog.accept();
         });
 
@@ -646,10 +635,10 @@ async function solveCaptchaChallenge(page) {
         if (initialResult) return initialResult; // Return if we got a token immediately
 
         // Main challenge solving loop
-        return await solveChallengeLoop(watcher);
+        return await solveChallengeLoop(watcher, geminiConfig);
 
     } catch (error) {
-        console.error('Error in solveCaptcha:', error);
+        logger.error('Error in solveCaptcha:', error);
         return null;
     } finally {
         watcher.cleanup();
@@ -660,9 +649,9 @@ async function solveCaptchaChallenge(page) {
 async function waitForCaptchaReady(watcher) {
     await new Promise((resolve) => {
         watcher.onCaptchaReady((captchaInfo) => {
-            console.log('\n=== Captcha Ready ===');
-            console.log('Time:', captchaInfo.timestamp);
-            console.log('Status:', captchaInfo.status);
+            logger.info('=== Captcha Ready ===');
+            logger.info(`Time: ${captchaInfo.timestamp}`);
+            logger.info(`Status: ${captchaInfo.status}`);
             resolve();
         });
     });
@@ -671,13 +660,13 @@ async function waitForCaptchaReady(watcher) {
 async function handleCheckboxClick(watcher) {
     const checkbox = watcher.getCheckbox();
     if (!checkbox) {
-        console.log('Could not get checkbox element');
+        logger.error('Could not get checkbox element');
         return null;
     }
 
     try {
         await checkbox.click();
-        console.log('Clicked recaptcha checkbox');
+        logger.info('Clicked recaptcha checkbox');
 
         // Wait for either immediate token or challenge
         const result = await Promise.race([
@@ -686,13 +675,13 @@ async function handleCheckboxClick(watcher) {
         ]);
 
         if (result?.type === 'token') {
-            console.log('Captcha solved immediately!');
+            logger.info('Captcha solved immediately!');
             return result.value;
         }
 
         return null;
     } catch (error) {
-        console.error('Failed to click checkbox:', error);
+        logger.error('Failed to click checkbox:', error);
         return null;
     }
 }
@@ -708,17 +697,17 @@ async function waitForToken(watcher) {
 async function waitForChallenge(watcher) {
     return new Promise((resolve) => {
         watcher.onChallengeOpen((info) => {
-            console.log('\n=== Challenge Detected ===');
-            console.log('Time:', info.timestamp);
-            console.log('Challenge prompt:', info.text);
-            console.log('Is Dynamic:', info.isDynamic);
-            console.log('Has Correct Format:', info.hasCorrectFormat);
+            logger.info('=== Challenge Detected ===');
+            logger.info(`Time: ${info.timestamp}`);
+            logger.info(`Challenge prompt: ${info.text}`);
+            logger.info(`Is Dynamic: ${info.isDynamic}`);
+            logger.info(`Has Correct Format: ${info.hasCorrectFormat}`);
             resolve({ type: 'challenge', value: info });
         });
     });
 }
 
-async function solveChallengeLoop(watcher) {
+async function solveChallengeLoop(watcher, geminiConfig) {
     const maxAttempts = 4;
     let attempts = 0;
 
@@ -726,33 +715,40 @@ async function solveChallengeLoop(watcher) {
         // Get current challenge info and validate
         const challengeInfo = await getCurrentChallenge(watcher);
         if (!challengeInfo) {
-            console.log('Failed to get valid challenge');
+            logger.warn('Failed to get valid challenge');
             attempts++;
             continue;
         }
 
         // Analyze and click tiles
-        const success = await handleChallengeTiles(watcher, challengeInfo);
+        const success = await handleChallengeTiles(watcher, challengeInfo, geminiConfig);
         if (!success) {
+            logger.warn(`Challenge attempt ${attempts + 1} failed`);
             attempts++;
             continue;
         }
 
         // Verify solution
         const token = await verifyChallenge(watcher);
-        if (token) return token;
+        if (token) {
+            logger.info('Challenge solved successfully!');
+            return token;
+        }
 
         attempts++;
         await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    console.log(`Challenge failed after ${maxAttempts} attempts`);
+    logger.error(`Challenge failed after ${maxAttempts} attempts`);
     return null;
 }
 
 async function getCurrentChallenge(watcher) {
     const frame = watcher.getChallengeFrame();
-    if (!frame) return null;
+    if (!frame) {
+        logger.error('No challenge frame available');
+        return null;
+    }
 
     const challengeInfo = await frame.evaluate(() => {
         const promptElement = document.querySelector('.rc-imageselect-instructions');
@@ -782,7 +778,7 @@ async function getCurrentChallenge(watcher) {
     });
 
     if (!challengeInfo?.hasCorrectFormat) {
-        console.log('Invalid challenge format, refreshing...');
+        logger.warn('Invalid challenge format, refreshing...');
         await refreshChallenge(frame);
         return null;
     }
@@ -790,7 +786,7 @@ async function getCurrentChallenge(watcher) {
     return challengeInfo;
 }
 
-async function handleChallengeTiles(watcher, challengeInfo) {
+async function handleChallengeTiles(watcher, challengeInfo, geminiConfig) {
     const maxDynamicIterations = 4;
     let dynamicIteration = 0;
 
@@ -807,7 +803,7 @@ async function handleChallengeTiles(watcher, challengeInfo) {
 
                 watcher.onTilesReady(() => {
                     if (!hasResolved) {
-                        console.log('Tiles ready for analysis');
+                        logger.debug('Tiles ready for analysis');
                         hasResolved = true;
                         clearTimeout(timeout);
                         resolve();
@@ -815,7 +811,7 @@ async function handleChallengeTiles(watcher, challengeInfo) {
                 });
             });
         } catch (error) {
-            console.log('Error waiting for tiles:', error.message);
+            logger.error('Error waiting for tiles:', error.message);
             return false;
         }
 
@@ -827,30 +823,31 @@ async function handleChallengeTiles(watcher, challengeInfo) {
             watcher.getChallengeFrame(),
             challengeInfo,
             watcher,
-            challengeInfo.isDynamic ? `${dynamicIteration + 1}/${maxDynamicIterations}` : ''
+            challengeInfo.isDynamic ? `${dynamicIteration + 1}/${maxDynamicIterations}` : '',
+            geminiConfig
         );
 
         if (!tilesToClick) {
-            console.log('Failed to get Gemini analysis');
+            logger.error('Failed to get Gemini analysis');
             return false;
         }
 
         if (tilesToClick.length === 0) {
-            console.log('No matching tiles found - proceeding to verify');
+            logger.info('No matching tiles found - proceeding to verify');
             return true;
         }
 
         // Click identified tiles
-        console.log('\n=== Clicking Tiles ===');
+        logger.info('=== Clicking Tiles ===');
         for (const coord of tilesToClick) {
             const clicked = await clickTile(watcher.getChallengeFrame(), coord, challengeInfo);
             if (!clicked) {
-                console.log(`Failed to click tile ${coord}`);
+                logger.error(`Failed to click tile ${coord}`);
                 return false;
             }
             await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 500));
         }
-        console.log('=== Finished Clicking Tiles ===\n');
+        logger.info('=== Finished Clicking Tiles ===');
 
         // For non-dynamic challenges, we're done after one round
         if (!challengeInfo.isDynamic) break;
@@ -858,7 +855,7 @@ async function handleChallengeTiles(watcher, challengeInfo) {
         // For dynamic challenges, continue until max iterations
         dynamicIteration++;
         if (dynamicIteration >= maxDynamicIterations) {
-            console.log(`Reached maximum dynamic iterations (${maxDynamicIterations})`);
+            logger.info(`Reached maximum dynamic iterations (${maxDynamicIterations})`);
             break;
         }
 
@@ -884,14 +881,17 @@ async function clickTile(frame, coord, challengeInfo) {
             return false;
         }, coord, challengeInfo.gridType);
     } catch (error) {
-        console.error(`Error clicking tile ${coord}:`, error);
+        logger.error(`Error clicking tile ${coord}: ${error.message}`);
         return false;
     }
 }
 
 async function verifyChallenge(watcher) {
     const frame = watcher.getChallengeFrame();
-    if (!frame) return null;
+    if (!frame) {
+        logger.error('No challenge frame available for verification');
+        return null;
+    }
 
     // Wait for tiles to be ready before verifying
     try {
@@ -905,7 +905,7 @@ async function verifyChallenge(watcher) {
 
             watcher.onTilesReady(() => {
                 if (!hasResolved) {
-                    console.log('Tiles ready for verification');
+                    logger.debug('Tiles ready for verification');
                     hasResolved = true;
                     clearTimeout(timeout);
                     resolve();
@@ -913,7 +913,7 @@ async function verifyChallenge(watcher) {
             });
         });
     } catch (error) {
-        console.log('Error waiting for tiles before verify:', error.message);
+        logger.error('Error waiting for tiles before verify:', error.message);
         return null;
     }
 
@@ -931,18 +931,21 @@ async function verifyChallenge(watcher) {
     });
 
     if (!shouldVerify) {
-        console.log('Verify button not ready or challenge invalid');
+        logger.warn('Verify button not ready or challenge invalid');
         return null;
     }
 
     const verifyButton = await frame.$('#recaptcha-verify-button');
-    if (!verifyButton) return null;
+    if (!verifyButton) {
+        logger.error('Could not find verify button');
+        return null;
+    }
 
     // Small delay before clicking verify
     await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 500));
 
     await verifyButton.click();
-    console.log('Clicked verify button');
+    logger.info('Clicked verify button');
 
     // Rest of the verification logic...
     const result = await Promise.race([
@@ -951,12 +954,16 @@ async function verifyChallenge(watcher) {
         new Promise(resolve => setTimeout(() => resolve({ type: 'timeout' }), 5000))
     ]);
 
-    if (result?.type === 'token') return result.value;
+    if (result?.type === 'token') {
+        logger.info('Verification successful - token received');
+        return result.value;
+    }
+    
     if (result?.type === 'challenge') {
-        // Handle new challenge
+        logger.info('New challenge appeared after verification');
         const newChallengeInfo = result.value;
         if (!newChallengeInfo.hasCorrectFormat) {
-            console.log('Invalid new challenge format, refreshing...');
+            logger.warn('Invalid new challenge format, refreshing...');
             await refreshChallenge(frame);
             return null;
         }
@@ -966,40 +973,50 @@ async function verifyChallenge(watcher) {
 
         // Handle the new challenge tiles
         const success = await handleChallengeTiles(watcher, newChallengeInfo);
-        if (!success) return null;
+        if (!success) {
+            logger.error('Failed to handle new challenge tiles');
+            return null;
+        }
 
         // Verify again
         return await verifyChallenge(watcher);
     }
+
+    logger.warn('Verification timed out');
     return null;
 }
 
 async function waitForNewChallenge(watcher) {
     return new Promise((resolve) => {
         watcher.onChallengeChange((info) => {
-            console.log('\n=== Challenge Changed ===');
-            console.log('Time:', info.timestamp);
-            console.log('New Challenge prompt:', info.text);
-            console.log('Is Dynamic:', info.isDynamic);
-            console.log('Has Correct Format:', info.hasCorrectFormat);
+            logger.info('=== Challenge Changed ===');
+            logger.info(`Time: ${info.timestamp}`);
+            logger.info(`New Challenge prompt: ${info.text}`);
+            logger.info(`Is Dynamic: ${info.isDynamic}`);
+            logger.info(`Has Correct Format: ${info.hasCorrectFormat}`);
             resolve({ type: 'challenge', value: info });
         });
     });
 }
 
 async function refreshChallenge(frame) {
-    const reloadButton = await frame.$('#recaptcha-reload-button');
-    if (reloadButton) {
-        await reloadButton.click();
-        await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+        const reloadButton = await frame.$('#recaptcha-reload-button');
+        if (reloadButton) {
+            await reloadButton.click();
+            logger.info('Challenge refreshed');
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        } else {
+            logger.warn('Could not find reload button');
+        }
+    } catch (error) {
+        logger.error(`Error refreshing challenge: ${error.message}`);
     }
 }
 
 // Update the main generateTokens function to use audio solving
-async function generateTokens(count, eventEmitter) {
+async function generateTokens(tokensToGenerate, eventEmitter, browsers, tabsPerBrowser, captchaUrl, geminiConfig) {
     const resultTracker = new ResultTracker();
-    const browsers = await launchBrowsers();
-    const tabsPerBrowser = Math.ceil(count / browsers.length);
 
     try {
         const allPromises = [];
@@ -1009,7 +1026,7 @@ async function generateTokens(count, eventEmitter) {
             const browser = browsers[browserIndex];
             const tabPromises = [];
 
-            const remainingTokens = count - tokensGenerated;
+            const remainingTokens = tokensToGenerate - tokensGenerated;
             const tabsForThisBrowser = Math.min(tabsPerBrowser, remainingTokens);
 
             for (let tabIndex = 0; tabIndex < tabsForThisBrowser; tabIndex++) {
@@ -1017,14 +1034,12 @@ async function generateTokens(count, eventEmitter) {
                     const page = await browser.newPage();
 
                     try {
-                        await page.setUserAgent(USER_AGENT);
-
-                        await page.goto('https://www.google.com/recaptcha/api2/demo', {
+                        await page.goto(captchaUrl, {
                             waitUntil: 'domcontentloaded',
                             timeout: 120000
                         });
 
-                        const token = await solveCaptchaChallenge(page);
+                        const token = await solveCaptchaChallenge(page, geminiConfig);
                         if (token) {
                             eventEmitter.emit('tokenGenerated', { token });
                             tokensGenerated++;
@@ -1033,15 +1048,13 @@ async function generateTokens(count, eventEmitter) {
                             resultTracker.addResult({ success: false, status: 'ERROR' });
                         }
 
-                        resultTracker.printStats();
-
                     } catch (error) {
-                        console.error('Error generating token:', error);
+                        logger.error('Error generating token:', error);
                         eventEmitter.emit('tokenError', { error: error.message });
                         resultTracker.addResult({ success: false, status: 'ERROR' });
-                        resultTracker.printStats();
+
                     } finally {
-                        await page.close().catch(console.error);
+                        await page.close().catch(err => logger.error('Error closing page:', err));
                     }
                 })();
 
@@ -1059,40 +1072,91 @@ async function generateTokens(count, eventEmitter) {
     }
 }
 
-// Update the main execution block
-if (require.main === module) {
-    const resultTracker = new ResultTracker();
-    const eventEmitter = new EventEmitter();
+// Update to match standard interface
+async function generateCaptchaTokensWithVisual({
+    // Core settings
+    eventEmitter,
+    tokensToGenerate = Infinity,
+    concurrentBrowsers = 1,
+    tabsPerBrowser = 1,
+    captchaUrl = 'https://www.google.com/recaptcha/api2/demo',
+    // Browser settings
+    browser = {
+        headless: false,
+        executablePath: os.platform().startsWith('win') 
+            ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" 
+            : "/usr/bin/google-chrome",
+        userDataDir: './chrome-user-data',
+        userAgents: [
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        ]
+    },
+    // Proxy settings
+    proxy = {
+        enabled: false,
+        host: null,
+        port: null,
+        username: null,
+        password: null
+    },
+    // Gemini configuration
+    gemini = {
+        apiKey: null,
+        model: 'gemini-1.5-flash'
+    },
+    // Logger configuration
+    logger: loggerConfig = {
+        level: 'info'    // 'error' | 'warn' | 'info' | 'debug' | 'silent'
+    }
+} = {}) {
+    // Update the global logger with user config
+    logger = createLogger({ level: loggerConfig.level });
 
-    // Set up event listeners
-    eventEmitter.on('tokenGenerated', (data) => {
-        console.log(clc.green('\nToken generated:'));
-        console.log(clc.yellow(data.token.slice(0, 50) + '...\n'));
-        resultTracker.addResult({ success: true, status: 'ACTIVE' });
-    });
+    if (!eventEmitter) {
+        throw new Error('eventEmitter is required');
+    }
 
-    eventEmitter.on('tokenError', (data) => {
-        console.log(clc.red('\nError:', data.error, '\n'));
-        resultTracker.addResult({ success: false, status: 'INACTIVE' });
-    });
+    if (!gemini.apiKey) {
+        throw new Error('Gemini API key is required');
+    }
 
-    console.log(clc.cyan('Starting token generation...'));
+    // Convert proxy config to internal format if enabled
+    const proxyConfig = proxy.enabled ? {
+        host: proxy.host,
+        port: proxy.port,
+        username: proxy.username,
+        password: proxy.password
+    } : null;
 
-    // Infinite loop function
-    const runInfinitely = async () => {
-        while (true) {
-            try {
-                await generateTokens(BATCH_SIZE, eventEmitter);
-                console.log(clc.green('Batch complete, starting next batch...'));
-                resultTracker.printStats();
-            } catch (error) {
-                console.error(clc.red('Error in batch:'), error);
-            }
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-    };
+    logger.info('\n=== Starting Visual Token Generation ===');
+    logger.info(`Concurrent Browsers: ${concurrentBrowsers}`);
+    logger.info(`Tabs per Browser: ${tabsPerBrowser}`);
+    logger.info(`Captcha URL: ${captchaUrl}`);
+    logger.info('=========================================\n');
 
-    runInfinitely().catch(console.error);
-} else {
-    module.exports = generateTokens;
+
+    const browsers = await Promise.all(
+        Array.from({ length: concurrentBrowsers }, async (_, index) => {
+            await new Promise(resolve => setTimeout(resolve, index * 1000));
+            return launchBrowser(
+                `${browser.userDataDir}/chrome-user-data-${index + 1}`, 
+                proxyConfig, 
+                browser
+            );
+        })
+    );
+
+    return generateTokens(
+        tokensToGenerate, 
+        eventEmitter, 
+        browsers,
+        tabsPerBrowser, 
+        captchaUrl,
+        gemini
+    );
 }
+
+module.exports = generateCaptchaTokensWithVisual;

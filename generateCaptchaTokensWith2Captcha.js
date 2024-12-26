@@ -2,37 +2,15 @@ const puppeteerExtra = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const axios = require('axios');
 const os = require('os');
-const path = require('path');
 const dotenv = require('dotenv');
-const fs = require('fs');
-const clc = require('cli-color');
+const createLogger = require('./utils/logger');
+
+let logger = createLogger({ level: 'info' });
+
 dotenv.config();
-
 puppeteerExtra.use(StealthPlugin());
-const osPlatform = os.platform();
 
-const executablePath = osPlatform.startsWith('win') ? "C://Program Files//Google//Chrome//Application//chrome.exe" : "/usr/bin/google-chrome";
 
-const CONCURRENT_BROWSERS = 6;
-const BATCH_SIZE = 16;
-const ALLOW_PROXY = false;
-
-// Add this line instead
-const APIKEY = process.env['2CAPTCHA_API_KEY'];
-
-// Optionally add a check to ensure the API key exists
-if (!APIKEY) {
-    throw new Error('2CAPTCHA_API_KEY is not set in environment variables');
-}
-
-// Define constant user agent to use throughout the app
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-
-// Add this as a global variable after the ResultTracker class
-const resultTracker = new ResultTracker();
-
-// Add this at the top level of the file, after other constants
-let currentChromeDataDirIndex = 0;
 
 class ResultTracker {
     constructor() {
@@ -55,6 +33,9 @@ class ResultTracker {
         if (this.results.length > this.maxResults) {
             this.results.shift();
         }
+
+        // Automatically print stats after adding a result
+        this.printStats();
     }
 
     getStats() {
@@ -80,85 +61,148 @@ class ResultTracker {
     printStats() {
         const stats = this.getStats();
         if (!stats) return;
-
-        console.log(`[Stats] Success Rate: ${clc.green(stats.successRate)}% | Avg Time/Token: ${clc.cyan(stats.avgTimePerToken)}s | Total Attempts: ${clc.yellow(stats.totalAttempts)} | Successful Tokens: ${clc.green(stats.successfulTokens)}`);
+        logger.info(`Stats: Success Rate: ${stats.successRate}% | Avg Time/Token: ${stats.avgTimePerToken}s | Total Attempts: ${stats.totalAttempts} | Successful Tokens: ${stats.successfulTokens}`);
     }
 }
 
 
+// Add this as a global variable after the ResultTracker class
+const resultTracker = new ResultTracker();
+
+// Add this at the top level of the file, after other constants
+let currentChromeDataDirIndex = 0;
+
+// Add defaultUserAgents at the top of the file after the imports
+const defaultUserAgents = [
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+];
 
 // Modify extractCapchaTokens function
-async function extractCapchaTokens() {
+async function generateCaptchaTokensWith2Captcha({ 
+    // Core settings
+    eventEmitter,
+    tokensToGenerate = Infinity,
+    concurrentBrowsers = 6,
+    tabsPerBrowser = 1,
+    captchaUrl = 'https://www.google.com/recaptcha/api2/demo',
+    // Browser settings
+    browser = {
+        headless: true,
+        executablePath: os.platform().startsWith('win') 
+            ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" 
+            : "/usr/bin/google-chrome",
+        userDataDir: './chrome-user-data',
+        userAgents: defaultUserAgents  // Use defaultUserAgents as default value
+    },
+    // Proxy settings
+    proxy = {
+        enabled: false,
+        host: null,
+        port: null,
+        username: null,
+        password: null
+    },
+    // 2captcha configuration
+    "2captcha": config2captcha = {
+        apiKey: null
+    },
+    // Logger configuration
+    logger: loggerConfig = {
+        level: 'info'    // 'error' | 'warn' | 'info' | 'debug' | 'silent'
+    }
+} = {}) {
+    // Update the global logger with user config
+    logger = createLogger({ level: loggerConfig.level });
+
+    if (!eventEmitter) {
+        throw new Error('eventEmitter is required');
+    }
+
+    if (!config2captcha.apiKey) {
+        throw new Error('2captcha API key is required');
+    }
+
+    // Convert proxy config to internal format if enabled
+    const proxyConfig = proxy.enabled ? {
+        host: proxy.host,
+        port: proxy.port,
+        username: proxy.username,
+        password: proxy.password
+    } : null;
+
+    logger.info('\n=== Starting 2Captcha Token Generation ===');
+    logger.info(`Concurrent Browsers: ${concurrentBrowsers}`);
+    logger.info(`Tabs per Browser: ${tabsPerBrowser}`);
+    logger.info(`Captcha URL: ${captchaUrl}`);
+    logger.info('=========================================\n');
+
     let shouldContinue = true;
+
+    // Use provided user agents or fall back to default array
+    const activeUserAgents = browser.userAgents || defaultUserAgents;
 
     while (shouldContinue) {
         try {
             // Launch browsers with unique data directories
             const browsers = await Promise.all(
-                Array.from({ length: CONCURRENT_BROWSERS }, async (_, index) => {
-                    // Delay each browser launch by index * 1000ms
+                Array.from({ length: concurrentBrowsers }, async (_, index) => {
                     await new Promise(resolve => setTimeout(resolve, index * 1000));
-
                     currentChromeDataDirIndex = (currentChromeDataDirIndex % 20) + 1;
-                    const chromeDataDir = `./chrome-user-data/chrome-user-data-${currentChromeDataDirIndex}`;
-                    return launchBrowser(chromeDataDir);
+                    const chromeDataDir = `${browser.userDataDir}/chrome-user-data-${currentChromeDataDirIndex}`;
+                    return launchBrowser(chromeDataDir, proxyConfig, browser.headless, activeUserAgents, browser);
                 })
             );
 
             try {
-                const pagePromises = Array(BATCH_SIZE).fill().map(async (_, index) => {
-                    const browser = browsers[index % CONCURRENT_BROWSERS];
-                    let page = null;
+                const allPromises = [];
+                let tokensGenerated = 0;
 
-                    try {
-                        page = await browser.newPage();
-                        await page.setUserAgent(USER_AGENT);
-                        await page.setDefaultTimeout(30000);
-                        await page.setDefaultNavigationTimeout(30000);
+                for (let browserIndex = 0; browserIndex < browsers.length; browserIndex++) {
+                    const browser = browsers[browserIndex];
+                    const tabPromises = [];
 
-                        if (ALLOW_PROXY) {
-                            await page.authenticate({
-                                username: process.env.PROXY_USERNAME,
-                                password: process.env.PROXY_PASSWORD
-                            });
-                        }
+                    const remainingTokens = tokensToGenerate - tokensGenerated;
+                    const tabsForThisBrowser = Math.min(tabsPerBrowser, remainingTokens);
 
-                        const result = await attemptCaptcha(page);
-                        console.log('Captcha result:', result);
+                    for (let tabIndex = 0; tabIndex < tabsForThisBrowser; tabIndex++) {
+                        const tabPromise = (async () => {
+                            let page = null;
+                            try {
+                                page = await browser.newPage();
+                                const result = await attemptCaptcha(page, config2captcha);
+                                
+                                if (result && result.token) {
+                                    eventEmitter.emit('tokenGenerated', { token: result.token });
+                                    resultTracker.addResult({ success: true });
+                                    tokensGenerated++;
+                                } else {
+                                    eventEmitter.emit('tokenError', { error: 'Failed to get token' });
+                                    resultTracker.addResult({ success: false });
+                                }
 
-                        if (result) {
-                            resultTracker.addResult({
-                                success: true,
-                                status: result.status
-                            });
-                        } else {
-                            resultTracker.addResult({
-                                success: false,
-                                status: 'ERROR'
-                            });
-                        }
+                            } catch (error) {
+                                logger.error('Error processing captcha:', error);
+                                resultTracker.addResult({ success: false });
+                            } finally {
+                                if (page) {
+                                    await page.close().catch(err =>
+                                        logger.error('Error closing page:', err)
+                                    );
+                                }
+                            }
+                        })();
 
-                        // Print stats immediately after processing each captcha
-                        resultTracker.printStats();
-
-                    } catch (error) {
-                        resultTracker.addResult({
-                            success: false,
-                            status: 'ERROR'
-                        });
-                        console.error('Error processing captcha:', error);
-                        // Print stats even after errors
-                        resultTracker.printStats();
-                    } finally {
-                        if (page) {
-                            await page.close().catch(err =>
-                                console.error('Error closing page:', err)
-                            );
-                        }
+                        tabPromises.push(tabPromise);
+                        await new Promise(resolve => setTimeout(resolve, 500));
                     }
-                });
 
-                await Promise.all(pagePromises);
+                    allPromises.push(...tabPromises);
+                }
+
+                await Promise.all(allPromises);
 
             } finally {
                 // Close browsers
@@ -168,19 +212,20 @@ async function extractCapchaTokens() {
             shouldContinue = false;
 
         } catch (error) {
-            console.error(`Fatal error:`, error);
+            logger.error('Token generation error:', error.message);
+            resultTracker.addResult({ success: false });
             shouldContinue = false;
         }
     }
 }
 
 // Update launchBrowser function to remove request interception setup
-async function launchBrowser(userDataDir) {
-    const proxyUrl = `${process.env.PROXY_HOST}:${process.env.PROXY_PORT}`;
+async function launchBrowser(userDataDir, proxyConfig = null, headless = true, activeUserAgents, browserConfig) {
+    const randomProfile = Math.floor(Math.random() * 4) + 1;
 
     const browser = await puppeteerExtra.launch({
-        headless: true,
-        executablePath: executablePath,
+        headless: headless,
+        executablePath: browserConfig.executablePath,
         userDataDir: userDataDir,
         protocolTimeout: 30000,
         args: [
@@ -198,8 +243,8 @@ async function launchBrowser(userDataDir) {
             '--lang=en',
             '--disable-web-security',
             '--flag-switches-begin --disable-site-isolation-trials --flag-switches-end',
-            `--profile-directory=Profile ${Math.floor(Math.random() * 20) + 1}`,
-            ALLOW_PROXY ? `--proxy-server=${proxyUrl}` : ''
+            `--profile-directory=Profile ${randomProfile}`,
+            proxyConfig ? `--proxy-server=${proxyConfig.host}:${proxyConfig.port}` : ''
         ].filter(Boolean),
         ignoreDefaultArgs: ['--enable-automation', '--enable-blink-features=AutomationControlled'],
         defaultViewport: null,
@@ -209,63 +254,71 @@ async function launchBrowser(userDataDir) {
     browser.on('targetcreated', async (target) => {
         const page = await target.page();
         if (page) {
-            await page.setUserAgent(USER_AGENT);
+            await page.evaluateOnNewDocument(() => {
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                delete navigator.__proto__.webdriver;
+            });
+            
+            const randomUserAgent = activeUserAgents[Math.floor(Math.random() * activeUserAgents.length)];
+            await page.setUserAgent(randomUserAgent);
+            
             await page.setDefaultTimeout(30000);
             await page.setDefaultNavigationTimeout(30000);
+
+            // Set proxy authentication if provided
+            if (proxyConfig?.username && proxyConfig?.password) {
+                await page.authenticate({
+                    username: proxyConfig.username,
+                    password: proxyConfig.password
+                });
+            }
         }
     });
 
     return browser;
 }
 
-// Update solve2Captcha function to use the new format and include user agent
-async function solve2Captcha(sitekey, pageUrl) {
+// Update solve2Captcha function to accept userAgent parameter
+async function solve2Captcha(sitekey, pageUrl, apiKey, userAgent) {
     try {
-        console.log('Initiating 2captcha solve request...');
+        logger.info('Initiating 2captcha solve request...');
 
+        // Get the current page's user agent from the browser
         const taskData = {
-            clientKey: APIKEY,
+            clientKey: apiKey,
             task: {
                 type: "RecaptchaV2TaskProxyless",
                 websiteURL: pageUrl,
                 websiteKey: sitekey,
-                userAgent: USER_AGENT,
+                userAgent: userAgent,  // Use the passed userAgent
                 isInvisible: false
             }
         };
 
-        //  console.log('Task data:', JSON.stringify(taskData, null, 2));
-
-        // Create task request
         const createTaskResponse = await axios.post('https://api.2captcha.com/createTask', taskData);
-
-        console.log('Create task response:', createTaskResponse.data);
+        logger.debug('Create task response:', createTaskResponse.data);
 
         if (createTaskResponse.data.errorId !== 0) {
             throw new Error(`Failed to create captcha task: ${createTaskResponse.data.errorDescription}`);
         }
 
         const taskId = createTaskResponse.data.taskId;
-        console.log('Got task ID:', taskId);
+        logger.info('Got task ID:', taskId);
 
         // Poll for the result
         let attempts = 0;
         const maxAttempts = 60;
 
         while (attempts < maxAttempts) {
-            // console.log(`Checking solution status, attempt ${attempts + 1}/${maxAttempts}`);
-
             await new Promise(resolve => setTimeout(resolve, 10000));
 
             const resultResponse = await axios.post('https://api.2captcha.com/getTaskResult', {
-                clientKey: APIKEY,
+                clientKey: apiKey,
                 taskId: taskId
             });
 
-            // console.log('Result response:', resultResponse.data);
-
             if (resultResponse.data.status === 'ready') {
-                console.log('Solution found!');
+                logger.info('Solution found!');
                 return resultResponse.data.solution.token;
             }
 
@@ -274,7 +327,7 @@ async function solve2Captcha(sitekey, pageUrl) {
 
         throw new Error('Timeout waiting for captcha solution');
     } catch (error) {
-        console.error('Error in solve2Captcha:', error);
+        logger.error('Error in solve2Captcha:', error);
         throw error;
     }
 }
@@ -282,21 +335,18 @@ async function solve2Captcha(sitekey, pageUrl) {
 // Add this new function for finding captcha frame
 async function findCaptchaFrame(page, timeout = 10000) {
     try {
-        // Wait for the frame to be attached
         const frame = await page.waitForFrame(frame =>
             frame.url().includes('api2/anchor'),
             { timeout }
         );
 
-        console.log(clc.cyan('[Captcha] Found anchor frame'));
+        logger.info('Found anchor frame');
 
-        // Wait for the checkbox to be ready
         const checkbox = await frame.waitForSelector('.recaptcha-checkbox-border', {
             visible: true,
             timeout
         });
 
-        // Verify the checkbox is actually clickable
         const isClickable = await frame.evaluate(() => {
             const checkbox = document.querySelector('.recaptcha-checkbox-border');
             if (!checkbox) return false;
@@ -308,26 +358,29 @@ async function findCaptchaFrame(page, timeout = 10000) {
         });
 
         if (!isClickable) {
-            console.log(clc.red('[Captcha] Checkbox found but not clickable'));
+            logger.warn('Checkbox found but not clickable');
             return null;
         }
 
-        console.log(clc.green('[Captcha] Checkbox is ready'));
+        logger.info('Checkbox is ready');
         return { frame, checkbox };
 
     } catch (error) {
-        console.error(clc.red('[Captcha] Error finding captcha:'), error.message);
+        logger.error('Error finding captcha:', error.message);
         return null;
     }
 }
 
 // Update the solveCaptchaChallenge function
-async function solveCaptchaChallenge(page) {
+async function solveCaptchaChallenge(page, config2captcha) {
     try {
+        // Get the current page's user agent
+        const userAgent = await page.evaluate(() => navigator.userAgent);
+        
         // Use the frame detection method
         const captchaElements = await findCaptchaFrame(page);
         if (!captchaElements) {
-            console.log(clc.red('[Captcha] Failed to find captcha elements'));
+            logger.error('Failed to find captcha elements');
             return null;
         }
 
@@ -335,21 +388,21 @@ async function solveCaptchaChallenge(page) {
         const frameUrl = captchaElements.frame.url();
         const sitekey = new URL(frameUrl).searchParams.get('k');
 
-        console.log('Sitekey found in frame URL:', sitekey);
+        logger.info('Sitekey found in frame URL:', sitekey);
 
         if (!sitekey) {
-            console.log(clc.red('[Captcha] Could not find reCAPTCHA sitekey in frame URL'));
+            logger.error('Could not find reCAPTCHA sitekey in frame URL');
             return null;
         }
 
         const pageUrl = page.url();
-        console.log('Using page URL:', pageUrl);
-        console.log('Using sitekey:', sitekey);
+        logger.info('Using page URL:', pageUrl);
+        logger.info('Using sitekey:', sitekey);
 
         try {
-            // Get solution from 2captcha
-            const solution = await solve2Captcha(sitekey, pageUrl);
-            console.log('Got solution from 2captcha:', clc.yellow(solution.slice(0, 50) + '...'));
+            // Pass userAgent to solve2Captcha
+            const solution = await solve2Captcha(sitekey, pageUrl, config2captcha.apiKey, userAgent);
+            logger.info('Got solution from 2captcha:', solution.slice(0, 50) + '...');
 
             // Insert the solution
             await page.evaluate((token) => {
@@ -367,19 +420,19 @@ async function solveCaptchaChallenge(page) {
             return solution;
 
         } catch (error) {
-            console.error('Error solving captcha with 2captcha:', error);
+            logger.error('Error solving captcha with 2captcha:', error);
             return null;
         }
     } catch (error) {
-        console.error('Error in solveCaptchaChallenge:', error);
+        logger.error('Error in solveCaptchaChallenge:', error);
         return null;
     }
 }
 
 // Update the attemptCaptcha function
-async function attemptCaptcha(page) {
+async function attemptCaptcha(page, config2captcha) {
     try {
-        console.log(`Loading demo page...`);
+        logger.info('Loading demo page...');
         await page.goto('https://www.google.com/recaptcha/api2/demo', {
             waitUntil: 'domcontentloaded',
             timeout: 120000
@@ -389,12 +442,12 @@ async function attemptCaptcha(page) {
         const captchaStartTime = Date.now();
 
         // Solve captcha using existing method
-        console.log('Attempting to solve captcha...');
-        const solvedToken = await solveCaptchaChallenge(page);
+        logger.info('Attempting to solve captcha...');
+        const solvedToken = await solveCaptchaChallenge(page, config2captcha);
 
         if (solvedToken) {
             const captchaSolveTime = (Date.now() - captchaStartTime) / 1000;
-            console.log(`Successfully solved captcha in ${captchaSolveTime.toFixed(2)} seconds`);
+            logger.info(`Successfully solved captcha in ${captchaSolveTime.toFixed(2)} seconds`);
 
             return {
                 status: 'SUCCESS',
@@ -402,20 +455,13 @@ async function attemptCaptcha(page) {
             };
         }
 
-        console.log('Failed to solve captcha');
+        logger.warn('Failed to solve captcha');
         return null;
 
     } catch (error) {
-        console.error(clc.red(`Error processing captcha:`), clc.red(error));
+        logger.error('Error processing captcha:', error);
         return null;
     }
 }
 
-// Remove the Express server code at the bottom and replace with:
-if (require.main === module) {
-    extractCapchaTokens().catch(error => {
-        console.error('Fatal error in captcha processing:', error);
-    });
-} else {
-    module.exports = extractCapchaTokens;
-}
+module.exports = generateCaptchaTokensWith2Captcha;
