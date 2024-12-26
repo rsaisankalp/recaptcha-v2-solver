@@ -1,7 +1,7 @@
 const EventEmitter = require('events');
-const generateCaptchaTokensWithAudio = require('./generateCaptchaTokensWithAudio');
-const generateCaptchaTokensWithVisual = require('./generateCaptchaTokensWithVisual');
-const generateCaptchaTokensWith2Captcha = require('./generateCaptchaTokensWith2Captcha');
+const generateCaptchaTokensWithAudio = require('../lib/generateCaptchaTokensWithAudio');
+const generateCaptchaTokensWithVisual = require('../lib/generateCaptchaTokensWithVisual');
+const generateCaptchaTokensWith2Captcha = require('../lib/generateCaptchaTokensWith2Captcha');
 
 // Example usage with all configuration options
 const audioExample = async () => {
