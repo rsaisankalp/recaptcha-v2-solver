@@ -1,5 +1,5 @@
 module.exports = {
-    generateCaptchaTokensWithAudio: require('./generateCaptchaTokensWithAudio'),
-    generateCaptchaTokensWithVisual: require('./generateCaptchaTokensWithVisual'),
-    generateCaptchaTokensWith2Captcha: require('./generateCaptchaTokensWith2Captcha')
+    generateCaptchaTokensWithAudio: require('./lib/generateCaptchaTokensWithAudio'),
+    generateCaptchaTokensWithVisual: require('./lib/generateCaptchaTokensWithVisual'),
+    generateCaptchaTokensWith2Captcha: require('./lib/generateCaptchaTokensWith2Captcha')
 }; 

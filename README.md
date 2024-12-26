@@ -93,7 +93,7 @@ await generateCaptchaTokensWith2Captcha({
 });
 ```
 
-See [examples.js](./examples.js) for more complete working examples.
+See [/examples](./examples) directory for more complete working examples.
 
 ## Events
 
@@ -133,7 +133,6 @@ Full configuration options with all possible settings:
     browser: {
         headless: true,                  // Optional: Run in headless mode (default: true)
         executablePath: '/path/to/chrome',// Optional: Chrome executable path
-        userDataDir: './chrome-data',    // Optional: Chrome user data directory
         userAgents: ['Mozilla/5.0...']   // Optional: Array of user agents to rotate
     },
     
