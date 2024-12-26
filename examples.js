@@ -2,7 +2,7 @@ const EventEmitter = require('events');
 const generateCaptchaTokensWithAudio = require('./generateCaptchaTokensWithAudio');
 const generateCaptchaTokensWithVisual = require('./generateCaptchaTokensWithVisual');
 const generateCaptchaTokensWith2Captcha = require('./generateCaptchaTokensWith2Captcha');
-
+//todo: delete preivous chrome data whne runnign again 
 // Example usage with all configuration options
 const audioExample = async () => {
     const eventEmitter = new EventEmitter();

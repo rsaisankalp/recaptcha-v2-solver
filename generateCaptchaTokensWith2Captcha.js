@@ -4,8 +4,45 @@ const axios = require('axios');
 const os = require('os');
 const dotenv = require('dotenv');
 const createLogger = require('./utils/logger');
+const fs = require('fs').promises;
+const path = require('path');
 
 let logger = createLogger({ level: 'info' });
+
+// Add this function to handle directory deletion
+async function cleanupUserDataDirs(baseDir) {
+    try {
+        logger.info('Cleaning up previous Chrome user data...');
+        
+        // Check if directory exists
+        try {
+            await fs.access(baseDir);
+        } catch {
+            // Directory doesn't exist, nothing to clean
+            return;
+        }
+
+        // Read all items in the directory
+        const items = await fs.readdir(baseDir);
+        
+        // Delete each chrome-user-data directory
+        for (const item of items) {
+            if (item.startsWith('chrome-user-data-')) {
+                const fullPath = path.join(baseDir, item);
+                try {
+                    await fs.rm(fullPath, { recursive: true, force: true });
+                    logger.debug(`Deleted ${fullPath}`);
+                } catch (err) {
+                    logger.warn(`Failed to delete ${fullPath}: ${err.message}`);
+                }
+            }
+        }
+        
+        logger.info('Chrome user data cleanup completed');
+    } catch (error) {
+        logger.error(`Error cleaning up Chrome user data: ${error.message}`);
+    }
+}
 
 dotenv.config();
 puppeteerExtra.use(StealthPlugin());
@@ -116,6 +153,9 @@ async function generateCaptchaTokensWith2Captcha({
 } = {}) {
     // Update the global logger with user config
     logger = createLogger({ level: loggerConfig.level });
+
+    // Add cleanup call at the start
+    await cleanupUserDataDirs(browser.userDataDir);
 
     if (!eventEmitter) {
         throw new Error('eventEmitter is required');
