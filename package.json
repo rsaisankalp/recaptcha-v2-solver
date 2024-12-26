@@ -1,13 +1,27 @@
 {
   "name": "captcha-solver",
   "version": "1.0.0",
-  "description": "",
-  "main": "main.js",
+  "description": "ReCaptcha v2 bypass solution using three methods: Audio transcription, Visual (Gemini), and 2Captcha",
+  "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "keywords": [
+    "recaptcha",
+    "captcha",
+    "solver",
+    "automation",
+    "puppeteer",
+    "2captcha",
+    "gemini",
+    "audio"
+  ],
   "author": "",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/njraladdin/recaptcha-solver.git"
+  },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
     "axios": "^1.7.8",

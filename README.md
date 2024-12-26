@@ -2,7 +2,6 @@
 
 A collection of methods to solve Google ReCaptcha v2 challenges using different approaches. This project provides three different methods to bypass ReCaptcha:
 
-
 ## Available Methods
 
 ### 1. 🎧 Audio Challenge Method 
@@ -19,103 +18,161 @@ A collection of methods to solve Google ReCaptcha v2 challenges using different 
 ### 3. 🤖 Visual Challenge Method (Experimental)
 - Uses AI (Gemini) to solve visual challenges
 - Experimental and less reliable
-- requires Free Gemini API keys
+- requires Free Gemini API key
 - Success rate: varies
 
 ## Visual Challenge bypass demo: See Google Gemini solving Google ReCaptcha in action
 
 ![Visual Challenge Demo](./media/visual_challenge_demo.gif)
 
-
-## Features
-
-- Multiple bypass methods to choose from
-- Event-driven architecture for easy integration
-- Configurable concurrent browser instances
-- Detailed logging and statistics
-- Proxy support
-- Stealth browser configurations
-
-## Prerequisites
+## Installation
 
 ```bash
-npm install puppeteer-extra puppeteer-extra-plugin-stealth axios dotenv cli-color undici
+npm install recaptcha-bypass-solutions
 ```
 
-## Configuration
+## Basic Usage Examples
 
-Create a `.env` file in your project root:
-
-```env
-# Audio Challenge Tokens (wit.ai API keys)
-WIT_TOKEN=your_wit_token_here
-WIT_TOKEN_1=your_backup_token_1
-WIT_TOKEN_2=your_backup_token_2
-
-# Visual Challenge API Keys (experimental)
-GEMINI_API_KEY=your_gemini_api_key
-OPENROUTER_API_KEY=your_openrouter_api_key
-
-# 2Captcha
-2CAPTCHA_API_KEY=your_2captcha_api_key
-
-# Proxy Configuration (optional)
-PROXY_HOST=your_proxy_host
-PROXY_PORT=your_proxy_port
-PROXY_USERNAME=your_proxy_username
-PROXY_PASSWORD=your_proxy_password
-
-# Method Selection
-CAPTCHA_METHOD=audio  # Options: 'audio', '2captcha', 'visual'
-```
-
-## Usage
-
-### Method 1: Event-Based Integration
-
+### Audio Method
 ```javascript
+const { generateCaptchaTokensWithAudio } = require('recaptcha-bypass-solutions');
 const EventEmitter = require('events');
-const generateCaptchaTokens = require('./generateCaptchaTokensWithAudio');
-// Or use: require('./generateCaptchaTokensWith2Captcha')
-// Or use: require('./generateCaptchaTokensWithVisual')
 
 const eventEmitter = new EventEmitter();
 
-// Listen for successful tokens
-eventEmitter.on('tokenGenerated', (data) => {
-    console.log('Captcha Token:', data.token);
+eventEmitter.on('tokenGenerated', ({ token }) => {
+    console.log('Got token:', token);
 });
 
-// Listen for errors
-eventEmitter.on('tokenError', (data) => {
-    console.error('Error:', data.error);
+await generateCaptchaTokensWithAudio({
+    eventEmitter,
+    captchaUrl: 'https://your-target-website.com/page-with-recaptcha',
+    wit: {
+        apiKeys: ['YOUR_WIT_TOKEN']
+    }
 });
-
-// Start generating tokens
-generateCaptchaTokens(eventEmitter);
 ```
 
-### Method 2: Direct Integration
+### Visual Method (Gemini)
+```javascript
+const { generateCaptchaTokensWithVisual } = require('recaptcha-bypass-solutions');
+const EventEmitter = require('events');
 
-You can copy the relevant solver code into your project and modify the `solveCaptchaChallenge` function to fit your specific needs.
+const eventEmitter = new EventEmitter();
+
+eventEmitter.on('tokenGenerated', ({ token }) => {
+    console.log('Got token:', token);
+});
+
+await generateCaptchaTokensWithVisual({
+    eventEmitter,
+    captchaUrl: 'https://your-target-website.com/page-with-recaptcha',
+    gemini: {
+        apiKey: 'YOUR_GEMINI_API_KEY'
+    }
+});
+```
+
+### 2Captcha Method
+```javascript
+const { generateCaptchaTokensWith2Captcha } = require('recaptcha-bypass-solutions');
+const EventEmitter = require('events');
+
+const eventEmitter = new EventEmitter();
+
+eventEmitter.on('tokenGenerated', ({ token }) => {
+    console.log('Got token:', token);
+});
+
+await generateCaptchaTokensWith2Captcha({
+    eventEmitter,
+    captchaUrl: 'https://your-target-website.com/page-with-recaptcha',
+    "2captcha": {
+        apiKey: 'YOUR_2CAPTCHA_API_KEY'
+    }
+});
+```
+
+See [examples.js](./examples.js) for more complete working examples.
+
+## Events
+
+Each solver emits the following events:
+
+```javascript
+// 1. Token successfully generated
+solver.on('tokenGenerated', (data) => {
+    console.log(data);
+    // {
+    //     token: "03AGdBq24PBgq_DRbWL..."  // reCAPTCHA token
+    // }
+});
+
+// 2. Error during token generation
+solver.on('tokenError', (data) => {
+    console.log(data);
+    // {
+    //     error: "Failed to solve captcha: Network error"
+    // }
+});
+```
 
 ## Configuration Options
 
-Each solver can be configured with these parameters:
+Full configuration options with all possible settings:
 
 ```javascript
-const CONCURRENT_BROWSERS = 2;  // Number of browser instances
-const TABS_PER_BROWSER = 1;     // Tabs per browser
-const ALLOW_PROXY = false;      // Enable/disable proxy
+{
+    eventEmitter: EventEmitter,          // Required: Event emitter instance
+    captchaUrl: 'https://example.com',   // Required: URL of the page containing reCAPTCHA
+    tokensToGenerate: 3,                 // Optional: Number of tokens to generate (default: Infinity)
+    concurrentBrowsers: 2,               // Optional: Number of concurrent browser instances (default: 1)
+    tabsPerBrowser: 1,                   // Optional: Tabs per browser (default: 1)
+    
+    // Browser settings
+    browser: {
+        headless: true,                  // Optional: Run in headless mode (default: true)
+        executablePath: '/path/to/chrome',// Optional: Chrome executable path
+        userDataDir: './chrome-data',    // Optional: Chrome user data directory
+        userAgents: ['Mozilla/5.0...']   // Optional: Array of user agents to rotate
+    },
+    
+    // Proxy settings
+    proxy: {
+        enabled: false,                  // Optional: Enable proxy (default: false)
+        host: 'proxy.example.com',       // Required if proxy enabled
+        port: '8080',                    // Required if proxy enabled
+        username: 'user',                // Optional: Proxy authentication
+        password: 'pass'                 // Optional: Proxy authentication
+    },
+    
+    // Logger settings
+    logger: {
+        level: 'info'                    // Optional: 'error' | 'warn' | 'info' | 'debug' | 'silent'
+    },
+    
+    // Method-specific options:
+    
+    // Audio Method only:
+    wit: {
+        apiKeys: [                       // Required for Audio method: Array of wit.ai API keys
+            'WIT_TOKEN_1',
+            'WIT_TOKEN_2'
+        ]
+    },
+    
+    // Visual Method only:
+    gemini: {
+        apiKey: 'GEMINI_API_KEY',       // Required for Visual method: Gemini API key
+        model: 'gemini-1.5-flash'       // Optional for Visual method: Gemini model (default: 'gemini-1.5-flash')
+    },
+    
+    // 2Captcha Method only:
+    "2captcha": {
+        apiKey: '2CAPTCHA_API_KEY'      // Required for 2Captcha method: 2captcha API key
+    }
+}
 ```
-
-## Statistics and Monitoring
-
-The solution includes a `ResultTracker` class that provides:
-- Success rate
-- Average time per token
-- Total attempts
-- Successful tokens count
 
 ## Notes
 

@@ -560,8 +560,7 @@ Respond ONLY with the JSON object.`;
 // Add helper function for screenshot and analysis
 async function takeScreenshotAndAnalyze(frame, challengeInfo, watcher, iterationInfo = '', geminiConfig) {
     const timestamp = Date.now();
-    const screenshotPath = `captcha_screenshots/challenge_${timestamp}.png`;
-    await fs.mkdir('captcha_screenshots', { recursive: true });
+    const screenshotPath = path.join(os.tmpdir(), `challenge_${timestamp}.png`);
 
     const challengeArea = await frame.$('.rc-imageselect-challenge');
     if (!challengeArea) {
@@ -608,12 +607,15 @@ async function takeScreenshotAndAnalyze(frame, challengeInfo, watcher, iteration
     }
 
     // Analyze with Gemini
-    return await analyzeWithGemini(
+    const result = await analyzeWithGemini(
         screenshotPath,
         challengeInfo.promptText || challengeInfo.text,
         challengeInfo.gridType,
         geminiConfig
     );
+
+
+    return result;
 }
 
 // Update the main challenge solving function
