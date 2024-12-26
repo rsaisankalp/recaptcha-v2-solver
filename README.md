@@ -1,4 +1,4 @@
-# ReCaptcha Bypass Solutions
+# ReCaptcha V2 Solver
 
 A collection of methods to solve Google ReCaptcha v2 challenges using different approaches. This project provides three different methods to bypass ReCaptcha:
 
@@ -28,7 +28,7 @@ A collection of methods to solve Google ReCaptcha v2 challenges using different 
 ## Installation
 
 ```bash
-npm install recaptcha-bypass-solutions
+npm install recaptcha-v2-solver
 ```
 
 ## Basic Usage Examples
