@@ -2,7 +2,7 @@ const EventEmitter = require('events');
 const generateCaptchaTokensWithAudio = require('./generateCaptchaTokensWithAudio');
 const generateCaptchaTokensWithVisual = require('./generateCaptchaTokensWithVisual');
 const generateCaptchaTokensWith2Captcha = require('./generateCaptchaTokensWith2Captcha');
-//todo: delete preivous chrome data whne runnign again 
+
 // Example usage with all configuration options
 const audioExample = async () => {
     const eventEmitter = new EventEmitter();
@@ -64,7 +64,7 @@ const visualExample = async () => {
         // Core settings
         eventEmitter,
         tokensToGenerate: 2,
-        concurrentBrowsers: 2,
+        concurrentBrowsers: 1,
         tabsPerBrowser: 1,
         captchaUrl: 'https://www.google.com/recaptcha/api2/demo',
 
@@ -139,7 +139,7 @@ const twoCaptchaExample = async () => {
 
 // Run any example
 if (require.main === module) {
-    audioExample().catch(console.error);
+    visualExample().catch(console.error);
 }
 
 module.exports = {
