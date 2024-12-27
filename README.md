@@ -35,7 +35,7 @@ npm install recaptcha-v2-solver
 
 ### Audio Method
 ```javascript
-const { generateCaptchaTokensWithAudio } = require('recaptcha-bypass-solutions');
+const { generateCaptchaTokensWithAudio } = require('recaptcha-v2-solver');
 const EventEmitter = require('events');
 
 const eventEmitter = new EventEmitter();
@@ -55,7 +55,7 @@ await generateCaptchaTokensWithAudio({
 
 ### Visual Method (Gemini)
 ```javascript
-const { generateCaptchaTokensWithVisual } = require('recaptcha-bypass-solutions');
+const { generateCaptchaTokensWithVisual } = require('recaptcha-v2-solver');
 const EventEmitter = require('events');
 
 const eventEmitter = new EventEmitter();
@@ -75,7 +75,7 @@ await generateCaptchaTokensWithVisual({
 
 ### 2Captcha Method
 ```javascript
-const { generateCaptchaTokensWith2Captcha } = require('recaptcha-bypass-solutions');
+const { generateCaptchaTokensWith2Captcha } = require('recaptcha-v2-solver');
 const EventEmitter = require('events');
 
 const eventEmitter = new EventEmitter();
