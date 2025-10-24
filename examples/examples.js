@@ -22,10 +22,8 @@ const audioExample = async () => {
         // Browser settings
         browser: {
             headless: false,
-            executablePath: process.platform === 'win32'
-                ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
-                : '/usr/bin/google-chrome',
-            userDataDir: './custom-chrome-data',
+            executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+	    userDataDir: './custom-chrome-data',
             userAgents: [
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/123.0.0.0 Safari/537.36',
                 'Mozilla/5.0 (Macintosh; Intel Mac OS X 11_0) Chrome/123.0.0.0 Safari/537.36'
@@ -90,7 +88,8 @@ const visualExample = async () => {
         // Add Gemini configuration
         gemini: {
             apiKey: process.env.GEMINI_API_KEY,
-            model: 'gemini-2.0-flash-exp'
+            model: 'gemini-flash-lite-latest'
+            //model: 'gemini-2.5-pro'
         }
     });
 };
