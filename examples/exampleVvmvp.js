@@ -75,14 +75,14 @@ const unifiedLogin = async () => {
                 console.log('   - Password field is visible.');
                 
                 console.log('\n[DEBUG] Typing username...');
-                await page.type(userInputSelector, 'nationalevents@vvmvp.org', { delay: 100 });
+                await page.type(userInputSelector, 'REPLACE_EMAIL', { delay: 100 });
                 console.log('   - Username entered.');
 
                 console.log('   - Pausing for 1 second...');
                 await new Promise(r => setTimeout(r, 1000));
                 
                 console.log('[DEBUG] Typing password...');
-                await page.type(passwordInputSelector, 'nateve111', { delay: 100 });
+                await page.type(passwordInputSelector, 'REPLACE_PASS', { delay: 100 });
                 console.log('   - Password entered.');
                 
                 console.log('   - Pausing for 2 seconds before clicking Login...');
